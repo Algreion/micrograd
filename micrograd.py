@@ -187,11 +187,24 @@ class Neuron(Module):
         return f"Neuron(inputs={len(self.w)},weights=[{",".join(str(round(w.data,2)) for w in self.w)}],bias={self.b.data:.2f})"
     def __str__(self):
         return f"N({len(self.w)})"
-    def __call__(self, input: list) -> Value:
-        """Get the neuron's activation given a group of inputs"""
+    def __call__(self, input: list, activation: str = 'tanh') -> Value:
+        """
+        Get the neuron's activation given a group of inputs
+        Activation options: tanh, sigmoid, relu, linear. Default is tanh.
+        """
         # w * x + b
-        activation = sum((w_i*x_i for w_i,x_i in zip(self.w, input)), self.b)
-        return activation.tanh()
+        output = sum((w_i*x_i for w_i,x_i in zip(self.w, input)), self.b)
+        match activation.lower():
+            case 'tanh'|'t':
+                return output.tanh()
+            case 'sigmoid'|'sig'|'s':
+                return output.sigmoid()
+            case 'relu'|'r':
+                return output.relu()
+            case 'linear'|'none'|'l':
+                return output
+            case _:
+                return ValueError('Invalid activation.')
     
     def parameters(self) -> list[Value]:
         """Returns all parameters from the neuron"""
@@ -212,9 +225,9 @@ class Layer(Module):
     def __str__(self):
         return f"L({len(self.neurons)})"
     
-    def __call__(self, input) -> Value | list[Value]:
+    def __call__(self, input, activation: str = 'tanh') -> Value | list[Value]:
         """Returns the activations for all neurons in the layer."""
-        out = [n(input) for n in self.neurons]
+        out = [n(input, activation) for n in self.neurons]
         return out[0] if len(out) == 1 else out
 
     def parameters(self) -> list[Value]:
@@ -223,17 +236,24 @@ class Layer(Module):
         return len(self.parameters())
 
 class MLP(Module):
-    def __init__(self, nin: int, layers: list[int]):
+    def __init__(self, nin: int, layers: list[int], activation: str = 'tanh', activation_last: str | None = None):
         """Core Neural Network.
         nin is number of inputs.
-        layers is list for number of neurons per layer. Ex: [4, 4, 1]"""
+        layers is list for number of neurons per layer. Ex: [4, 4, 1]
+        Activation options: tanh, sigmoid, relu, linear. Default is tanh.
+        If activation_last isn't specified, it will be the same as the rest.
+        """
         size = [nin] + layers
         self.layers = [Layer(size[i],size[i+1]) for i in range(len(layers))]
+        self.activation = activation
+        self.activation_last = activation if activation_last is None else activation_last
     def __call__(self, input: list) -> Value | list[Value]:
         """Activates the entire network on a given input."""
         if isinstance(input,(float,int,Value)): input = [input]
-        for layer in self.layers:
-            input = layer(input) # Iteratively update the result for every layer
+        layers = len(self.layers)
+        for i,layer in enumerate(self.layers):
+            if i == layers-1: input = layer(input,self.activation_last)
+            else: input = layer(input,self.activation) # Iteratively update the result for every layer
         return input # Result (for final layer, the output)
     
     def __len__(self) -> int:
@@ -241,7 +261,7 @@ class MLP(Module):
     def __getitem__(self, index: int) -> Layer:
         return self.layers[index]
     def __repr__(self):
-        return f"MLP(size={len(self.layers)},layers=[{", ".join(str(len(l.neurons)) for l in self.layers)}])"
+        return f"MLP(size={len(self.layers)},layers=[{", ".join(str(len(l.neurons)) for l in self.layers)}],activation={self.activation}{f',activation_last={self.activation_last}' if self.activation_last != self.activation else ''})"
     def __str__(self):
         res = ""
         res += f"[{" ".join("I" for _ in range(len(self[0][0].w)))}]\n"
@@ -269,8 +289,7 @@ class MLP(Module):
                 if first.startswith("["):
                     check = True
                     if first != str(self).replace("\n",""):
-                        print("MLP doesn't match given model.")
-                        return
+                        raise ValueError("MLP doesn't match given model.")
         with open(file,'r') as f:
             if check: next(f)
             for p in self.parameters():
@@ -285,13 +304,49 @@ class MLP(Module):
         """Returns the parameter count of the NN."""
         return len(self.parameters())
 
-def cost(output: list, expected: list) -> Value:
+def cost(output: list, expected: list, average: bool = True) -> Value:
     """Computes the cost for a particular result."""
-    return sum((v_e-v_o)**2 for v_o,v_e in zip(output,expected))/len(expected)
+    factor = len(expected) if average else 1
+    if len(expected)>0 and isinstance(expected[0],list):
+        return sum(cost(o,e,average=False) for o,e in zip(output,expected))/factor
+    return sum((v_e-v_o)**2 for v_o,v_e in zip(output,expected))/factor
+
+def one_hot(n: int, size: int = -1):
+    """Return list representation of integers (0-indexed)."""
+    if size == -1: size = n+1
+    elif size < n+1: raise ValueError
+    out = [0] * size
+    out[n] = 1
+    return out
+
+def softmax(output: list[Value]) -> list[Value]:
+    """Computes softmax."""
+    max_logit = max(v.data for v in output) # Stability
+    output = [(v-max_logit).exp() for v in output]
+    norm = sum(output)
+    return [v/norm for v in output]
+
+def crossentropy(output: list[Value], expected: int) -> Value:
+    """Returns negative log loss."""
+    return -output[expected].log()
+
+
+def train(network, inputs: list[list | int | float], outputs: list[list | int | float], step: float = 0.1):
+    """Single step of NN training on a input-output batch."""
+    if not isinstance(inputs,list): inputs = [inputs]
+    if not isinstance(outputs,list): outputs = [outputs]
+    result = [network(i) for i in inputs]
+    c = cost(result, outputs)
+    network.zero_grad()
+    c.backward()
+    for p in network.parameters():
+        p.data -= step * p.grad
+    return result
 
 def test(inputs: list, expected_outputs: list, nin: int, nout: int, iterations: int = 50, 
-        step: float = 0.05, hidden_layers: list = [4,4], info: bool = True):
+        step: float = 0.05, hidden_layers: list | None = None, info: bool = True):
     """Mock NN training."""
+    if hidden_layers is None: hidden_layers = [4,4]
     n = MLP(nin,hidden_layers+[nout]) # Network
 
     for k in range(iterations):
@@ -309,32 +364,3 @@ def test(inputs: list, expected_outputs: list, nin: int, nout: int, iterations: 
         
         if info: print(k, f"{loss.data:.3f}")
     return n
-
-def train(network, inputs: list[int | float], outputs: list[int | float], step: float = 0.1):
-    """Single step of NN training (On a single input->output)"""
-    if type(inputs) != list: inputs = [inputs]
-    if type(outputs) != list: outputs = [outputs]
-    result = [network(i) for i in inputs]
-    c = cost(result, outputs)
-    network.zero_grad()
-    c.backward()
-    for p in network.parameters():
-        p.data -= step * p.grad
-    return result
-
-def one_hot(n: int, size: int = -1):
-    """Return list representation of integers (0-indexed)."""
-    if size == -1 or size < n+1:
-        size = n+1
-    out = [0] * size
-    out[n] = 1
-    return out
-
-def softmax(output: list[Value]) -> list[Value]:
-    """Computes softmax."""
-    output = [i.exp() for i in output]
-    return [i/sum(output) for i in output]
-
-def crossentropy(output: list[Value], expected: int) -> Value:
-    """Returns negative log loss."""
-    return -output[expected].log()
