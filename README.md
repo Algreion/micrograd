@@ -1,5 +1,5 @@
 
-# micrograd
+# micrograd-plus
 
 Tiny automatic differentiation engine and neural network library, built from scratch in Python (with Python standard libraries).
 
@@ -16,15 +16,15 @@ The function demo_xor(...) trains a full MLP to compute the XOR function.
 
 With one output, the MLP easily achieves 100% accuracy. With multiple outputs (computing three pairwise XORs), the MLP converges and often reaches 100% accuracy within 1000 iterations.
 
-This demo confirms that the library does indeed implement neural networks capable of learning non-linear functions.
+This demo confirms that the whole pipeline does indeed learn non-linear functions end to end.
 
 ## Requirements
 Python 3.12 or newer (nested f-strings). No dependencies needed.
 
 ## Known limitations
-- backward() is recursive, so a chain of over 1000 dependent operations will hit Python's recursion limit.
+- backward() is recursive, graph depth is limited by Python's recursion limit (around 1000).
 - The logarithm implementation fails with Value(0), so cross-entropy loss may fail if predicted probabilities are saturated.
 - The project focuses on the fundamentals of deep learning, so modern techniques like AdamW or GELU are not implemented.
 
 ## Credits
-The project was inspired by Andrej Karpathy's [micrograd](https://www.youtube.com/watch?v=VMj-3S1tku0) lecture, and extends the idea with additional operations and activations, model saving/loading, and helper functions to create a complete library.
+The project was based on Andrej Karpathy's [micrograd](https://www.youtube.com/watch?v=VMj-3S1tku0) lecture, and extends the idea with additional operations and activations, model saving/loading, and helper functions to create a complete library.
