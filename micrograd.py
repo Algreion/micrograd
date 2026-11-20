@@ -204,7 +204,7 @@ class Neuron(Module):
             case 'linear'|'none'|'l':
                 return output
             case _:
-                return ValueError('Invalid activation.')
+                raise ValueError('Invalid activation.')
     
     def parameters(self) -> list[Value]:
         """Returns all parameters from the neuron"""
@@ -236,23 +236,25 @@ class Layer(Module):
         return len(self.parameters())
 
 class MLP(Module):
-    def __init__(self, nin: int, layers: list[int], activation: str = 'tanh', activation_last: str | None = None):
+    def __init__(self, nin: int, layers: list[int], activation: str = 'tanh', last_activation: str | None = None):
         """Core Neural Network.
         nin is number of inputs.
         layers is list for number of neurons per layer. Ex: [4, 4, 1]
         Activation options: tanh, sigmoid, relu, linear. Default is tanh.
-        If activation_last isn't specified, it will be the same as the rest.
+        If last_activation isn't specified, it will be the same as the rest.
         """
         size = [nin] + layers
         self.layers = [Layer(size[i],size[i+1]) for i in range(len(layers))]
         self.activation = activation
-        self.activation_last = activation if activation_last is None else activation_last
+        self.last_activation = activation if last_activation is None else last_activation
     def __call__(self, input: list) -> Value | list[Value]:
         """Activates the entire network on a given input."""
         if isinstance(input,(float,int,Value)): input = [input]
+        if isinstance(input[0],(list,tuple)):
+            return [self(l) for l in input]
         layers = len(self.layers)
         for i,layer in enumerate(self.layers):
-            if i == layers-1: input = layer(input,self.activation_last)
+            if i == layers-1: input = layer(input,self.last_activation)
             else: input = layer(input,self.activation) # Iteratively update the result for every layer
         return input # Result (for final layer, the output)
     
@@ -261,7 +263,7 @@ class MLP(Module):
     def __getitem__(self, index: int) -> Layer:
         return self.layers[index]
     def __repr__(self):
-        return f"MLP(size={len(self.layers)},layers=[{", ".join(str(len(l.neurons)) for l in self.layers)}],activation={self.activation}{f',activation_last={self.activation_last}' if self.activation_last != self.activation else ''})"
+        return f"MLP(size={len(self.layers)},layers=[{", ".join(str(len(l.neurons)) for l in self.layers)}],activation={self.activation}{f',last_activation={self.last_activation}' if self.last_activation != self.activation else ''})"
     def __str__(self):
         res = ""
         res += f"[{" ".join("I" for _ in range(len(self[0][0].w)))}]\n"
@@ -304,12 +306,18 @@ class MLP(Module):
         """Returns the parameter count of the NN."""
         return len(self.parameters())
 
-def cost(output: list, expected: list, average: bool = True) -> Value:
-    """Computes the cost for a particular result."""
-    factor = len(expected) if average else 1
-    if len(expected)>0 and isinstance(expected[0],list):
-        return sum(cost(o,e,average=False) for o,e in zip(output,expected))/factor
-    return sum((v_e-v_o)**2 for v_o,v_e in zip(output,expected))/factor
+def mse(output: list, expected: list) -> Value:
+    """Computes the MSE (cost) for a particular result."""
+    lo,le = len(output),len(expected)
+    if lo != le: raise ValueError(f'Length mismatch between output ({lo}) and expected ({le}).')
+    if le==0: return Value(0)
+
+    factor = le
+    if isinstance(expected[0],(list,tuple)):
+        tot = sum(mse(o,e) for o,e in zip(output,expected))
+    else:
+        tot = sum((v_e-v_o)**2 for v_o,v_e in zip(output,expected))
+    return tot/factor
 
 def one_hot(n: int, size: int = -1):
     """Return list representation of integers (0-indexed)."""
@@ -319,48 +327,99 @@ def one_hot(n: int, size: int = -1):
     out[n] = 1
     return out
 
-def softmax(output: list[Value]) -> list[Value]:
+def softmax(logits: list[Value]) -> list[Value]:
     """Computes softmax."""
-    max_logit = max(v.data for v in output) # Stability
-    output = [(v-max_logit).exp() for v in output]
-    norm = sum(output)
-    return [v/norm for v in output]
+    max_logit = max(v.data for v in logits) # Stability
+    logits = [(v-max_logit).exp() for v in logits]
+    norm = sum(logits)
+    return [v/norm for v in logits]
 
-def crossentropy(output: list[Value], expected: int) -> Value:
-    """Returns negative log loss."""
-    return -output[expected].log()
+def bce(p: Value | list[Value], expected: int | bool, sigmoid: bool = False) -> Value:
+    """Returns binary cross-entropy loss given a probability p. Expected should be 0 or 1.
+    If sigmoid is True, p will be treated as a raw logit."""
+    if isinstance(p,list):
+        lp,le = len(p),len(expected)
+        if lp!=le: raise ValueError(f'Length mismatch between p ({lp}) and expected ({le}).')
+        return sum(bce(v,e,sigmoid) for v,e in zip(p,expected))/lp
+    if sigmoid: p = p.sigmoid()
+    return -p.log() if expected else -(1-p).log()
 
+def cce(logits: list[Value | list], expected: int | list[int]) -> Value:
+    """Returns categorical cross-entropy loss. Expected should be an index or one-hot vector."""
+    if len(logits)>0 and isinstance(logits[0],list):
+        ll,le = len(logits),len(expected)
+        if ll!=le: raise ValueError(f'Length mismatch between logits ({ll}) and expected ({le}).')
+        return sum(cce(l,e) for l,e in zip(logits,expected))/ll
+    if isinstance(expected,list): expected = expected.index(1)
+    return -softmax(logits)[expected].log()
 
-def train(network, inputs: list[list | int | float], outputs: list[list | int | float], step: float = 0.1):
-    """Single step of NN training on a input-output batch."""
+def train(network, inputs: list[list | int | float], outputs: list[list | int | float], step: float = 0.1, cost: str = 'mse') -> list[Value]:
+    """Single step of NN training on a input-output batch.
+    Cost: mse, bce, cce. Default is mse.
+    """
     if not isinstance(inputs,list): inputs = [inputs]
     if not isinstance(outputs,list): outputs = [outputs]
+    match cost.lower():
+        case 'bce': f = bce
+        case 'cce': f = cce
+        case 'mse': f = mse
+        case _: raise ValueError('Invalid cost function. Choose mse, bce or cce.')
     result = [network(i) for i in inputs]
-    c = cost(result, outputs)
+    c = f(result, outputs)
     network.zero_grad()
     c.backward()
     for p in network.parameters():
         p.data -= step * p.grad
     return result
 
-def test(inputs: list, expected_outputs: list, nin: int, nout: int, iterations: int = 50, 
-        step: float = 0.05, hidden_layers: list | None = None, info: bool = True):
-    """Mock NN training."""
+def train_xor(multi_output: bool = False, iterations: int = 1000, step: float = 0.5, info: bool = True,
+    hidden_layers: list | None = None, activation: str = 'tanh', last_activation: str = 'sigmoid') -> MLP:
+    """
+    Mock NN training to compute XOR.
+    If multi_output, computes all possible XOR combinations: (x0,x1), (x0,x2), (x1,x2).
+    """
     if hidden_layers is None: hidden_layers = [4,4]
-    n = MLP(nin,hidden_layers+[nout]) # Network
+    def xor(a: int, b: int) -> int:
+        return int((a and not b) or (not a and b))
+    def check(outputs: list, expected: list) -> tuple:
+        if multi_output: # Flattening
+            expected = [e for ex in expected for e in ex]
+            outputs = [o for out in outputs for o in out]
+        total = len(expected)
+        correct = sum(round(o.data)==e for o,e in zip(outputs,expected))
+        return (correct,total,correct/total)
+    
+    if multi_output:
+        layers = hidden_layers+[3]
+        X = [[a,b,c] for a in range(2) for b in range(2) for c in range(2)]
+        Y = [[xor(x[0],x[1]), xor(x[0],x[2]), xor(x[1],x[2])] for x in X]
+        nin = 3
+    else:
+        layers = hidden_layers+[1]
+        X = [[a,b] for a in range(2) for b in range(2)]
+        Y = [xor(*x) for x in X]
+        nin = 2
+    nn = MLP(nin,layers,activation=activation,last_activation=last_activation)
+    
+    if info: start = check(nn(X),Y)
 
     for k in range(iterations):
-        # Forward-pass
-        result = n(inputs)
-        loss = cost(result, expected_outputs)
+        # Forward pass
+        result = nn(X)
+        loss = bce(result, Y)
 
-        # Backward-pass
-        n.zero_grad()
+        # Backward pass
+        nn.zero_grad()
         loss.backward()
 
         # Update
-        for p in n.parameters():
+        for p in nn.parameters():
             p.data -= step * p.grad
-        
-        if info: print(k, f"{loss.data:.3f}")
-    return n
+        if info and (k==0 or not (k+1)%100): print(f"{k+1}. Loss: {loss.data:.3f}")
+    if info:
+        print()
+        sc,st,sp = start
+        print(f"Initialization: {sp*100:.1f}% ({sc} out of {st} correct)")
+        ec,et,ep = check(nn(X),Y)
+        print(f"Post-training: {ep*100:.1f}% ({ec} out of {et} correct)")
+    return nn
