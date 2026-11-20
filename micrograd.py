@@ -65,7 +65,7 @@ class Value:
     def __rtruediv__(self, other):
         return self**(-1) * other
     def __iter__(self):
-        return iter([self])
+        return iter([self]) # Needed as Layer.__call__ returns a Value or list
 
     def exp(self):
         x = self.data
@@ -126,7 +126,7 @@ class Value:
     
     def sigmoid(self):
         x = self.data
-        s = 1 / (1 + exp(-x)) # sigmoid(x)
+        s = 1 / (1 + exp(-x)) if x >= 0 else exp(x)/(1+exp(x)) # Prevents negative overflow
         out = Value(s, (self,), 'sigmoid')
         def _backward():
             self.grad += s * (1-s) * out.grad
@@ -182,7 +182,7 @@ class Neuron(Module):
         nin = Number of expected inputs
         """
         self.w = [Value(random.uniform(-1,1)) for _ in range(nin)] # Random weight for each input
-        self.b = Value(random.uniform(-1,1)) # Starting bias for neuron | 0.01 if relu, random(-1,1) if tanh
+        self.b = Value(random.uniform(-1,1)) # Starting bias for neuron
     def __repr__(self):
         return f"Neuron(inputs={len(self.w)},weights=[{",".join(str(round(w.data,2)) for w in self.w)}],bias={self.b.data:.2f})"
     def __str__(self):
@@ -193,6 +193,7 @@ class Neuron(Module):
         Activation options: tanh, sigmoid, relu, linear. Default is tanh.
         """
         # w * x + b
+        if len(self.w) != len(input): raise ValueError(f"Wrong input size: expected {len(self.w)}, received {len(input)}.")
         output = sum((w_i*x_i for w_i,x_i in zip(self.w, input)), self.b)
         match activation.lower():
             case 'tanh'|'t':
@@ -259,7 +260,7 @@ class MLP(Module):
         return input # Result (for final layer, the output)
     
     def __len__(self) -> int:
-        return self._size()
+        return len(self.layers)
     def __getitem__(self, index: int) -> Layer:
         return self.layers[index]
     def __repr__(self):
@@ -353,7 +354,7 @@ def cce(logits: list[Value | list], expected: int | list[int]) -> Value:
     if isinstance(expected,list): expected = expected.index(1)
     return -softmax(logits)[expected].log()
 
-def train(network, inputs: list[list | int | float], outputs: list[list | int | float], step: float = 0.1, cost: str = 'mse') -> list[Value]:
+def train_step(network, inputs: list[list | int | float], outputs: list[list | int | float], step: float = 0.1, cost: str = 'mse') -> list[Value]:
     """Single step of NN training on a input-output batch.
     Cost: mse, bce, cce. Default is mse.
     """
@@ -372,11 +373,11 @@ def train(network, inputs: list[list | int | float], outputs: list[list | int | 
         p.data -= step * p.grad
     return result
 
-def train_xor(multi_output: bool = False, iterations: int = 1000, step: float = 0.5, info: bool = True,
+def demo_xor(multi_output: bool = False, iterations: int = 1000, step: float = 0.5, info: bool = True,
     hidden_layers: list | None = None, activation: str = 'tanh', last_activation: str = 'sigmoid') -> MLP:
     """
-    Mock NN training to compute XOR.
-    If multi_output, computes all possible XOR combinations: (x0,x1), (x0,x2), (x1,x2).
+    Demo: Trains an MLP to compute XOR.
+    If multi_output, computes three pairwise XORs: (x0,x1), (x0,x2), (x1,x2).
     """
     if hidden_layers is None: hidden_layers = [4,4]
     def xor(a: int, b: int) -> int:
