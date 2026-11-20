@@ -1,4 +1,4 @@
-from math import tanh,exp,log,cos,tan,sin
+from math import tanh,exp,log,cos,sin
 import random
 
 class Value:
@@ -6,13 +6,15 @@ class Value:
         """Node for a data structure that links math operations together (Base for NN)"""
         self.data = data
         self.grad = 0 # Derivative (gradient) affecting the final output | Base case (for output) is 1.
-        self._backward = lambda: None 
+        self._backward = lambda: None
         self._prev = set(_children)
         self._op = _op
     def __repr__(self):
-        return f"Value(data={self.data},grad={self.grad})"
+        return f"Value(data={self.data:.2f},grad={self.grad:.2f},op={self._op if self._op else None})"
     def __str__(self):
         return str(self.data)
+    def __getitem__(self, index: int):
+        return list(self._prev)[index]
     def __add__(self, other):
         other = other if isinstance(other,Value) else Value(other)
         out = Value(self.data + other.data, (self, other), '+')
@@ -37,6 +39,10 @@ class Value:
     def __lt__(self, other):
         if not isinstance(other,Value): other = Value(other)
         return self.data < other.data
+    def __ge__(self, other):
+        return -self <= -other
+    def __gt__(self, other):
+        return -self < -other
     def __mul__(self, other):
         other = other if isinstance(other,Value) else Value(other)
         out = Value(self.data * other.data, (self, other), '*')
@@ -48,7 +54,7 @@ class Value:
     def __rmul__(self, other):
         return self*other
     def __pow__(self, number: float):
-        assert isinstance(number, (int, float)), "Supports only ints and floats"
+        if not isinstance(number, (int, float)): return NotImplemented
         out = Value(self.data**number, (self,), f'**{number}')
         def _backward():
             self.grad += number * self.data**(number-1) * out.grad
@@ -104,7 +110,7 @@ class Value:
     
     def tan(self):
         x = self.data
-        t = tan(x)
+        t = sin(x)/cos(x)
         out = Value(t, (self,), 'tan')
         def _backward():
             self.grad += (1 + t**2)*out.grad
@@ -127,7 +133,7 @@ class Value:
         out._backward = _backward
         return out
     
-    def backward(self):
+    def backward(self) -> None:
         """Backpropagation with previous nodes"""
         def topological_sort(root):
             """Adds a node to the list only after all its children have been processed"""
@@ -146,27 +152,28 @@ class Value:
         for node in reversed(topological_sort(self)):
             node._backward()
 
+def explanation():
+    pass
+    #! Backpropagation
+    # We have a final output L, and want to find how everything impacts it (derivatives)
+    # Derivative of previous nodes (neurons!) is self-explanatory.
+    # Going back one layer, we apply the chain rule, multiplying the derivatives together. | LOCAL GRADIENT!
+    # ^ If dx=3 and dy=2, where x->y->L, then a tiny nudge to x causes 3 times the nudge in y, which in turn causes 2 times the nudge in L. Hence 3*2 = 6 for the impact x has to L.
+    # This way, we can recursively go back and find how each neuron impacts the final output!
+    # Example: x -> y -> L
+    # dL/dy = 3, dy/dx = 2, then dL/dx = (dL/dy)*(dy/dx)=3*2 = 6 | You know how all nodes impact the final one.
+    #* _backward() is a closure to apply local gradient onto previous nodes
+    #* In this case, it is applied after a topological sort
+    #* We must add the derivatives to the gradient since we have multiple variables.
 
-#! Backpropagation
-# We have a final output L, and want to find how everything impacts it (derivatives)
-# Derivative of previous nodes (neurons!) is self-explanatory.
-# Going back one layer, we apply the chain rule, multiplying the derivatives together. | LOCAL GRADIENT!
-# ^ If dx=3 and dy=2, where x->y->L, then a tiny nudge to x causes 3 times the nudge in y, which in turn causes 2 times the nudge in L. Hence 3*2 = 6 for the impact x has to L.
-# This way, we can recursively go back and find how each neuron impacts the final output!
-# Example: x -> y -> L
-# dL/dy = 3, dy/dx = 2, then dL/dx = (dL/dy)*(dy/dx)=3*2 = 6 | You know how all nodes impact the final one.
-#* _backward() is a closure to apply local gradient onto previous nodes
-#* In this case, it is applied after a topological sort
-#* We must add the derivatives to the gradient since we have multiple variables.
-
-#* Nudging all values in the direction of their gradient, we increase the final output
+    #* Nudging all values in the direction of their gradient, we increase the final output
 
 class Module:
-    def zero_grad(self):
+    def zero_grad(self) -> None:
         for p in self.parameters():
             p.grad = 0
 
-    def parameters(self):
+    def parameters(self) -> list:
         return []
 
 class Neuron(Module):
@@ -180,16 +187,16 @@ class Neuron(Module):
         return f"Neuron(inputs={len(self.w)},weights=[{",".join(str(round(w.data,2)) for w in self.w)}],bias={self.b.data:.2f})"
     def __str__(self):
         return f"N({len(self.w)})"
-    def __call__(self, input: list):
+    def __call__(self, input: list) -> Value:
         """Get the neuron's activation given a group of inputs"""
         # w * x + b
         activation = sum((w_i*x_i for w_i,x_i in zip(self.w, input)), self.b)
         return activation.tanh()
     
-    def parameters(self):
+    def parameters(self) -> list[Value]:
         """Returns all parameters from the neuron"""
         return self.w + [self.b]
-    def _size(self):
+    def _size(self) -> int:
         return len(self.parameters())
 
 class Layer(Module):
@@ -198,38 +205,40 @@ class Layer(Module):
         nin = Number of expected inputs.
         neurons = Number of neurons in the layer"""
         self.neurons = [Neuron(nin) for _ in range(neurons)]
-    def __getitem__(self, index: int):
+    def __getitem__(self, index: int) -> Neuron:
         return self.neurons[index]
     def __repr__(self):
         return f"Layer(inputs={len(self.neurons[0].w)},neurons={len(self.neurons)})"
     def __str__(self):
         return f"L({len(self.neurons)})"
     
-    def __call__(self, input):
+    def __call__(self, input) -> Value | list[Value]:
         """Returns the activations for all neurons in the layer."""
         out = [n(input) for n in self.neurons]
         return out[0] if len(out) == 1 else out
 
-    def parameters(self):
+    def parameters(self) -> list[Value]:
         return [p for n in self for p in n.parameters()]
-    def _size(self):
+    def _size(self) -> int:
         return len(self.parameters())
 
 class MLP(Module):
-    def __init__(self, nin: int, layers: list):
-        """Multi-layer Perceptron.
+    def __init__(self, nin: int, layers: list[int]):
+        """Core Neural Network.
         nin is number of inputs.
-        layers is list for number of neurons per layer"""
+        layers is list for number of neurons per layer. Ex: [4, 4, 1]"""
         size = [nin] + layers
         self.layers = [Layer(size[i],size[i+1]) for i in range(len(layers))]
-    def __call__(self, input: list):
+    def __call__(self, input: list) -> Value | list[Value]:
         """Activates the entire network on a given input."""
         if isinstance(input,(float,int,Value)): input = [input]
         for layer in self.layers:
             input = layer(input) # Iteratively update the result for every layer
         return input # Result (for final layer, the output)
     
-    def __getitem__(self, index: int):
+    def __len__(self) -> int:
+        return self._size()
+    def __getitem__(self, index: int) -> Layer:
         return self.layers[index]
     def __repr__(self):
         return f"MLP(size={len(self.layers)},layers=[{", ".join(str(len(l.neurons)) for l in self.layers)}])"
@@ -240,54 +249,55 @@ class MLP(Module):
         res += f"\n[{" ".join("O" for _ in self[-1].neurons)}]"
         return res
     
-    def parameters(self):
+    def parameters(self) -> list[Value]:
         """Total weights and biases of the entire MLP"""
         return [p for l in self for p in l.parameters()]
     
-    def save(self, file: str):
+    def save(self, file: str, validation: bool = True) -> None:
         """Save trained model on a file."""
         with open(file, 'w') as f:
-            f.write(str(self).replace("\n","")+'\n')
+            if validation: f.write(str(self).replace("\n","")+'\n')
             for p in self.parameters():
                 f.write(str(p.data)+'\n')
 
-    def load(self, file: str):
-        """Load parameters onto a file. Must be of the same type as original."""
+    def load(self, file: str, validation: bool = True) -> None:
+        """Load parameters from a file. Must be of the same type as original."""
         check = False
-        with open(file, 'r') as f:
-            first = f.readline().strip()
-            if first.startswith("["):
-                check = True
-                if first != str(self).replace("\n",""):
-                    print("MLP doesn't match given model.")
-                    return
+        if validation:
+            with open(file, 'r') as f:
+                first = f.readline().strip()
+                if first.startswith("["):
+                    check = True
+                    if first != str(self).replace("\n",""):
+                        print("MLP doesn't match given model.")
+                        return
         with open(file,'r') as f:
             if check: next(f)
             for p in self.parameters():
                 p.data = float(f.readline())
 
-    def _reset(self):
+    def _reset(self) -> None:
         """Resets all training, beware!"""
         for p in self.parameters():
             p.data = random.uniform(-1,1)
         self.zero_grad()
-    def _size(self):
+    def _size(self) -> int:
         """Returns the parameter count of the NN."""
         return len(self.parameters())
 
-def cost(output: list, expected: list):
+def cost(output: list, expected: list) -> Value:
     """Computes the cost for a particular result."""
-    return sum((v_e-v_o)**2 for v_o,v_e in zip(output,expected))
+    return sum((v_e-v_o)**2 for v_o,v_e in zip(output,expected))/len(expected)
 
-def test(inputs: list, outputs: list, nin: int, nout: int, iterations: int = 50, 
-         step: float = 0.05, hidden_layers: list = [4,4], info: bool = True):
-    
+def test(inputs: list, expected_outputs: list, nin: int, nout: int, iterations: int = 50, 
+        step: float = 0.05, hidden_layers: list = [4,4], info: bool = True):
+    """Mock NN training."""
     n = MLP(nin,hidden_layers+[nout]) # Network
 
     for k in range(iterations):
         # Forward-pass
-        result = [n(x) for x in inputs]
-        loss = cost(result, outputs)
+        result = n(inputs)
+        loss = cost(result, expected_outputs)
 
         # Backward-pass
         n.zero_grad()
@@ -300,11 +310,11 @@ def test(inputs: list, outputs: list, nin: int, nout: int, iterations: int = 50,
         if info: print(k, f"{loss.data:.3f}")
     return n
 
-def train(network, inputs: list, outputs: list, step: float = 0.1):
-    """Single step of NN training"""
+def train(network, inputs: list[int | float], outputs: list[int | float], step: float = 0.1):
+    """Single step of NN training (On a single input->output)"""
     if type(inputs) != list: inputs = [inputs]
     if type(outputs) != list: outputs = [outputs]
-    result = network(inputs)
+    result = [network(i) for i in inputs]
     c = cost(result, outputs)
     network.zero_grad()
     c.backward()
@@ -319,3 +329,12 @@ def one_hot(n: int, size: int = -1):
     out = [0] * size
     out[n] = 1
     return out
+
+def softmax(output: list[Value]) -> list[Value]:
+    """Computes softmax."""
+    output = [i.exp() for i in output]
+    return [i/sum(output) for i in output]
+
+def crossentropy(output: list[Value], expected: int) -> Value:
+    """Returns negative log loss."""
+    return -output[expected].log()
