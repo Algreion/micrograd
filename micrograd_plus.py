@@ -64,6 +64,8 @@ class Value:
         return self * other**(-1) # a/b = a * (1/b)
     def __rtruediv__(self, other):
         return self**(-1) * other
+    def __round__(self):
+        return round(self.data)
 
     def exp(self):
         x = self.data
@@ -150,19 +152,6 @@ class Value:
         for node in reversed(topological_sort(self)):
             node._backward()
 
-def explanation():
-    print("We have a final output L, and want to find how everything impacts it (derivatives)")
-    print("Derivative of previous nodes (neurons!) is self-explanatory.")
-    print("Going back one layer, we apply the chain rule, multiplying the derivatives together. | LOCAL GRADIENT!")
-    print("^ If dy/dx=3 and dL/dy=2, where x->y->L, then a tiny nudge to x causes 3 times the nudge in y, which in turn causes 2 times the nudge in L. Hence 3*2 = 6 for the impact x has to L.")
-    print("This way, we can recursively go back and find how each neuron impacts the final output!")
-    print("Example: x -> y -> L")
-    print("dL/dy = 2, dy/dx = 3, then dL/dx = (dL/dy)*(dy/dx)=2*3 = 6 | You know how all nodes impact the final one.")
-    print("_backward() is a closure to apply local gradient onto previous nodes")
-    print("In this case, it is applied in reverse topological order.")
-    print("We must add the derivatives to the gradient since contributions of all nodes must be summed.")
-    print("Nudging all values in the direction of their gradient, we increase the final output")
-
 class Module:
     def zero_grad(self) -> None:
         for p in self.parameters():
@@ -188,7 +177,7 @@ class Neuron(Module):
         Activation options: tanh, sigmoid, relu, linear. Default is tanh.
         """
         # w * x + b
-        if isinstance(input, Value): input = [input] # Avoids bare Value inputs
+        if isinstance(input, Value): input = [input] # 1-neuron layers return Value
         if len(self.w) != len(input): raise ValueError(f"Wrong input size: expected {len(self.w)}, received {len(input)}.")
         output = sum((w_i*x_i for w_i,x_i in zip(self.w, input)), self.b)
         match activation.lower():

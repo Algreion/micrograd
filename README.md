@@ -1,7 +1,7 @@
 
 # micrograd-plus
 
-Tiny automatic differentiation engine and neural network library, built from scratch in Python (using only the Python standard library).
+Tiny automatic differentiation engine and neural network library, built from scratch in Python (using only the Python standard library), based on Andrej Karpathy's micrograd lecture.
 
 The goal was to implement backpropagation by hand to verify a network built from basic operations can learn. The same principles, applied to tensors, are what libraries like PyTorch automate.
 
@@ -10,6 +10,33 @@ The goal was to implement backpropagation by hand to verify a network built from
 - Neural networks (Neuron, Layer, MLP): Multilayer perceptron built out of Value objects, so training requires no external libraries.
 - Helper functions (mse, bce, cce, one_hot, softmax, train_step): Simplified model training.
 - Save and load: Model weights can be saved to a text file and loaded back, with a check that the layers match.
+
+## Requirements
+Python 3.12 or newer (nested f-strings). No dependencies needed.
+
+## Usage
+```python
+import random
+from micrograd_plus import Value, MLP, train_step
+
+# Autograd engine
+a, b = Value (-2.0), Value(3.0)
+c = a*b + a.tanh()
+c.backward()
+print(a.grad, b.grad) # 3.07, -2.0 (dc/da, dc/db)
+
+# Train a network on XOR
+random.seed(42)
+X = [[0, 0], [0, 1], [1, 0], [1, 1]]
+Y = [0, 1, 1, 0]
+nn = MLP(2, [4, 4, 1], last_activation="sigmoid")
+for _ in range(1000):
+    train_step(nn, X, Y, cost='bce')
+print([round(nn(x)) for x in X]) # [0,1,1,0]
+
+nn.save("model.txt") # Reload weights with nn.load("model.txt")
+
+```
 
 ## Toy problem: training on XOR
 The function demo_xor(...) trains a full MLP to compute the XOR function.
@@ -22,9 +49,6 @@ The results over 30 runs with demo_test(seed=42) and default demo_xor settings a
 
 Single-output learns XOR reliably, while multi-output reaches high accuracy but doesn't converge to a perfect solution within 1000 iterations.
 
-## Requirements
-Python 3.12 or newer (nested f-strings). No dependencies needed.
-
 ## Known limitations
 - backward() is recursive, graph depth is limited by Python's recursion limit (around 1000).
 - The logarithm implementation fails with Value(0), so cross-entropy loss may fail if predicted probabilities are saturated.
@@ -32,4 +56,4 @@ Python 3.12 or newer (nested f-strings). No dependencies needed.
 - The project focuses on the fundamentals of deep learning, so modern techniques like AdamW or GELU are not implemented.
 
 ## Credits
-The project was based on Andrej Karpathy's [micrograd](https://www.youtube.com/watch?v=VMj-3S1tku0) lecture, and extends the idea with additional operations and activations, model saving/loading, and helper functions. A toy problem is used to implement a training run end to end.
+The project was based on Andrej Karpathy's [micrograd](https://www.youtube.com/watch?v=VMj-3S1tku0) lecture, and extends the idea with additional operations and activations, model saving/loading, helper functions, and a XOR demo that trains a network end to end.
