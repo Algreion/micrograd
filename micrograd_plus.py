@@ -64,10 +64,6 @@ class Value:
         return self * other**(-1) # a/b = a * (1/b)
     def __rtruediv__(self, other):
         return self**(-1) * other
-    def __iter__(self):
-        # A 1-neuron layer call returns a bare Value, but the next layer zips over its input.
-        # This is needed to avoid silently iterating over the Value's children.
-        return iter([self])
 
     def exp(self):
         x = self.data
@@ -158,13 +154,13 @@ def explanation():
     print("We have a final output L, and want to find how everything impacts it (derivatives)")
     print("Derivative of previous nodes (neurons!) is self-explanatory.")
     print("Going back one layer, we apply the chain rule, multiplying the derivatives together. | LOCAL GRADIENT!")
-    print("^ If dx=3 and dy=2, where x->y->L, then a tiny nudge to x causes 3 times the nudge in y, which in turn causes 2 times the nudge in L. Hence 3*2 = 6 for the impact x has to L.")
+    print("^ If dy/dx=3 and dL/dy=2, where x->y->L, then a tiny nudge to x causes 3 times the nudge in y, which in turn causes 2 times the nudge in L. Hence 3*2 = 6 for the impact x has to L.")
     print("This way, we can recursively go back and find how each neuron impacts the final output!")
     print("Example: x -> y -> L")
-    print("dL/dy = 3, dy/dx = 2, then dL/dx = (dL/dy)*(dy/dx)=3*2 = 6 | You know how all nodes impact the final one.")
+    print("dL/dy = 2, dy/dx = 3, then dL/dx = (dL/dy)*(dy/dx)=2*3 = 6 | You know how all nodes impact the final one.")
     print("_backward() is a closure to apply local gradient onto previous nodes")
-    print("In this case, it is applied after a topological sort")
-    print("We must add the derivatives to the gradient since we have multiple variables.")
+    print("In this case, it is applied in reverse topological order.")
+    print("We must add the derivatives to the gradient since contributions of all nodes must be summed.")
     print("Nudging all values in the direction of their gradient, we increase the final output")
 
 class Module:
@@ -192,6 +188,7 @@ class Neuron(Module):
         Activation options: tanh, sigmoid, relu, linear. Default is tanh.
         """
         # w * x + b
+        if isinstance(input, Value): input = [input] # Avoids bare Value inputs
         if len(self.w) != len(input): raise ValueError(f"Wrong input size: expected {len(self.w)}, received {len(input)}.")
         output = sum((w_i*x_i for w_i,x_i in zip(self.w, input)), self.b)
         match activation.lower():
@@ -322,7 +319,7 @@ def mse(output: list, expected: list) -> Value:
 def one_hot(n: int, size: int = -1):
     """Return list representation of integers (0-indexed)."""
     if size == -1: size = n+1
-    elif size < n+1: raise ValueError
+    elif size < n+1: raise ValueError("Size smaller than the number given.")
     out = [0] * size
     out[n] = 1
     return out
@@ -374,7 +371,7 @@ def train_step(network, inputs: list[list | int | float], outputs: list[list | i
 
 def demo_xor(multi_output: bool = False, iterations: int = 1000, step: float = 0.5, info: bool = True,
     hidden_layers: list | None = None, activation: str = 'tanh', last_activation: str = 'sigmoid',
-    seed: int | None = None) -> MLP:
+    seed: int | None = None, test: bool = False) -> MLP | tuple:
     """
     Demo: Trains an MLP to compute XOR.
     If multi_output, computes three pairwise XORs: (x0,x1), (x0,x2), (x1,x2).
@@ -418,11 +415,31 @@ def demo_xor(multi_output: bool = False, iterations: int = 1000, step: float = 0
         # Update
         for p in nn.parameters():
             p.data -= step * p.grad
-        if info and (k==0 or not (k+1)%100): print(f"{k+1}. Loss: {loss.data:.3f}")
+        if info and (k==0 or not (k+1)%100): print(f"{k+1:>4}. Loss: {loss.data:>4.3f}")
     if info:
         print()
         sc,st,sp = start
         print(f"Initialization: {sp*100:.1f}% ({sc} out of {st} correct)")
         ec,et,ep = check(nn(X),Y)
         print(f"Post-training: {ep*100:.1f}% ({ec} out of {et} correct)")
+    if test: return nn,*check(nn(X),Y)
     return nn
+
+def demo_test(seed: int | None = 42, runs: int = 30) -> None:
+    """Test of various runs of the XOR demo with default hyperparameters. With 30 runs, takes around 1m30s."""
+    if seed is not None: random.seed(seed)
+    perfect_single = 0
+    perfect_multi = 0
+    avg_single = 0
+    avg_multi = 0
+    for i in range(runs):
+        _,ec,et,ep = demo_xor(multi_output=False,info=False,test=True)
+        if ec==et: perfect_single += 1
+        avg_single += ep
+        _,ec,et,ep = demo_xor(multi_output=True,info=False,test=True)
+        if ec==et: perfect_multi += 1
+        avg_multi += ep
+        print(f"\r{i+1}/{runs}",end='',flush=True)
+    print(f"\nResult:")
+    print(f"Single-output: {avg_single*100/runs:.2f}% average accuracy, {perfect_single}/{runs} perfect runs.")
+    print(f"Multi-output: {avg_multi*100/runs:.2f}% average accuracy, {perfect_multi}/{runs} perfect runs.")

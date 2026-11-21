@@ -1,7 +1,7 @@
 
 # micrograd-plus
 
-Tiny automatic differentiation engine and neural network library, built from scratch in Python (with Python standard libraries).
+Tiny automatic differentiation engine and neural network library, built from scratch in Python (using only the Python standard library).
 
 The goal was to implement backpropagation by hand to verify a network built from basic operations can learn. The same principles, applied to tensors, are what libraries like PyTorch automate.
 
@@ -14,9 +14,13 @@ The goal was to implement backpropagation by hand to verify a network built from
 ## Toy problem: training on XOR
 The function demo_xor(...) trains a full MLP to compute the XOR function.
 
-With one output, the MLP easily achieves 100% accuracy. With multiple outputs (computing three pairwise XORs), the MLP converges and often reaches 100% accuracy within 1000 iterations.
+Single-output learns XOR, while multi-output learns three pairwise XORs. As XOR is a non-linear function, it is a good toy problem to test the library.
 
-This demo confirms that the whole pipeline does indeed learn non-linear functions end to end.
+The results over 30 runs with demo_test(seed=42) and default demo_xor settings are:
+- Single-output: 100.00% average accuracy, 30/30 perfect runs.
+- Multi-output: 93.61% average accuracy, 12/30 perfect runs.
+
+Single-output learns XOR reliably, while multi-output reaches high accuracy but doesn't converge to a perfect solution within 1000 iterations.
 
 ## Requirements
 Python 3.12 or newer (nested f-strings). No dependencies needed.
@@ -24,7 +28,8 @@ Python 3.12 or newer (nested f-strings). No dependencies needed.
 ## Known limitations
 - backward() is recursive, graph depth is limited by Python's recursion limit (around 1000).
 - The logarithm implementation fails with Value(0), so cross-entropy loss may fail if predicted probabilities are saturated.
+- As the project uses pure Python scalars, it is much slower than specialized tensor libraries.
 - The project focuses on the fundamentals of deep learning, so modern techniques like AdamW or GELU are not implemented.
 
 ## Credits
-The project was based on Andrej Karpathy's [micrograd](https://www.youtube.com/watch?v=VMj-3S1tku0) lecture, and extends the idea with additional operations and activations, model saving/loading, and helper functions to create a complete library.
+The project was based on Andrej Karpathy's [micrograd](https://www.youtube.com/watch?v=VMj-3S1tku0) lecture, and extends the idea with additional operations and activations, model saving/loading, and helper functions. A toy problem is used to implement a training run end to end.
